@@ -1,33 +1,14 @@
 import { nod3EventManager, Nod3EventType } from "./events";
 import { getUUID, Maybe } from "./utils";
 
-export type Nod3SocketType = string;
-
-export type Nod3SocketAllowedTypes = Nod3SocketType[];
-
-export interface Nod3SocketLabel {
-  in: Maybe<string>;
-  out: Maybe<string>;
-}
-
-export interface Nod3SocketData<T> {
-  type: Nod3SocketType;
-  value: T;
-}
-
-export type Nod3Executor = (
-  inputs: Nod3Socket[],
-  outputs: Nod3Socket[]
-) => void;
-
-class Nod3AndSocketMem {
-  private mem: (Nod3 | Nod3Socket)[];
+class Nod3Mem {
+  private mem: Nod3<unknown>[];
 
   constructor() {
     this.mem = [];
   }
 
-  public add = (el: Nod3 | Nod3Socket) => {
+  public add = (el: Nod3<unknown>) => {
     this.mem.push(el);
   };
 
@@ -47,113 +28,54 @@ class Nod3AndSocketMem {
   public getAll = () => this.mem;
 }
 
-const memory = new Nod3AndSocketMem();
+const memory = new Nod3Mem();
 
-class Nod3Socket {
-  objectType: string;
-  allowedTypes: Nod3SocketAllowedTypes;
+export interface Nod3Input {
   id: string;
   type: string;
-  label: Nod3SocketLabel;
-  data: Maybe<Nod3SocketData<unknown>>;
-  side: {
-    out: Maybe<Nod3>;
-    in: Maybe<Nod3>;
-  };
+  allowedTypes: string[];
+  value: unknown;
+  hook?: string
+}
+
+export interface Nod3Output {
+  id: string;
+  type: string;
+  executor: <A, B>(preprocessData: A, inputs: Nod3Inputs) => B;
+  value: unknown;
+}
+
+export type Nod3Inputs = Record<string, Nod3Input>;
+export type Nod3Outputs = Record<string, Nod3Output>;
+class Nod3<PreprocessData> {
+  objectType: string;
+  id: string;
+
+  type: string;
+
+  inputs: Nod3Inputs;
+  outputs: Nod3Outputs;
+
+  position: [number, number];
+
+  preprocessData: Maybe<PreprocessData>;
+  preprocessor: (inputs: Nod3Inputs) => PreprocessData;
 
   constructor(
     type: string,
-    allowedTypes: Nod3SocketAllowedTypes,
-    label: Nod3SocketLabel,
-    data?: Nod3SocketData<unknown>
+    position: [number, number],
+    preprocessor: (inputs: Nod3Inputs) => PreprocessData
   ) {
-    this.id = getUUID();
-    this.type = type;
-    this.objectType = "socket";
-    this.label = label;
-    this.data = data;
-    this.allowedTypes = allowedTypes;
-    this.side = { in: null, out: null };
-    memory.add(this);
-  }
-
-  public dispose = () => {
-    memory.remove(this.id);
-  };
-
-  public connectTo = (inputSocket: Nod3Socket) => {
-    if (!this.side.out || !inputSocket.side.in) return;
-    if (!inputSocket.allowedTypes.includes(this.type)) return;
-    if (this.side.in) this.sever();
-
-    nod3EventManager.fire(Nod3EventType.changed, {
-      id: this.id,
-      details: "socket connected",
-    });
-
-    const nod3 = inputSocket.side.in;
-    this.side.in = nod3;
-    this.label.in = inputSocket.label.in;
-
-    for (let i = 0; i < nod3.inputs.length; i++) {
-      if (nod3.inputs[i].id === inputSocket.id) nod3.inputs[i] = this;
-    }
-
-    inputSocket.dispose();
-  };
-
-  public sever = () => {
-    if (!(this.side.in && this.side.out)) return;
-
-    nod3EventManager.fire(Nod3EventType.changed, {
-      id: this.id,
-      details: "socket severed",
-    });
-
-    const nod3 = this.side.out;
-    this.side.out = null;
-
-    for (let i = 0; i < nod3.inputs.length; i++) {
-      if (nod3.inputs[i].id === this.id)
-        nod3.inputs[i] = new Nod3Socket(
-          this.type,
-          this.allowedTypes,
-          this.label
-        );
-    }
-  };
-
-  public get isConnected() {
-    return this.side.in && this.side.out;
-  }
-
-  public static getById = (id: string) => {
-    const obj = memory.get(id);
-    if (obj?.objectType === "socket") return obj as Nod3Socket;
-    return null;
-  };
-
-  public static getAll = () => {
-    return memory
-      .getAll()
-      .filter((el) => el.objectType === "socket") as Nod3Socket[];
-  };
-}
-
-class Nod3 {
-  objectType: string;
-  type: string;
-  id: string;
-  inputs: Nod3Socket[];
-  outputs: Nod3Socket[];
-  executor: Maybe<Nod3Executor>;
-
-  constructor(type: string) {
     this.id = getUUID();
     this.objectType = "nod3";
     this.type = type;
-    this.inputs = [];
-    this.outputs = [];
+
+    this.position = position;
+
+    this.inputs = {} as Nod3Inputs;
+    this.outputs = {} as Nod3Outputs;
+
+    this.preprocessor = preprocessor;
 
     nod3EventManager.fire(Nod3EventType.added, {
       id: this.id,
@@ -163,65 +85,100 @@ class Nod3 {
     memory.add(this);
   }
 
-  public addSocket = (
-    type: Nod3SocketType,
-    label: string,
-    side: "in" | "out",
-    allowedTypes: Nod3SocketAllowedTypes = [type]
-  ) => {
-    const lbl = {
-      in: null,
-      out: null,
-    } as Nod3SocketLabel;
-    lbl[side] = label;
-    const socket = new Nod3Socket(type, allowedTypes, lbl);
-    socket.side[side] = this;
-    this[`${side}puts`].push(socket);
+  public addInput = <value>(label: string, options: Partial<Nod3Input>) => {
+    options.id = `${`${this.id}@${label}`}input`;
+    options.type = options.type ?? "basic";
+    options.allowedTypes = options.allowedTypes ?? [options.type];
+    options.value = options.value as Maybe<value>;
+    this.inputs[label] = options as Nod3Input;
+    return this;
   };
 
+  public addOutput = (
+    label: string,
+    options: Partial<Nod3Output> & Pick<Nod3Output, "executor">
+  ) => {
+    options.id = `${`${this.id}@${label}`}output`;
+    options.type = options.type ?? "basic";
+    options.value = null;
+    this.outputs[label] = options as Nod3Output;
+    return this;
+  };
+
+  public refreshOutputs = () => {
+    this.preprocessData = this.preprocessor(this.inputs);
+    for (const label in this.outputs) {
+      this.outputs[label].value = this.outputs[label].executor(
+        this.preprocessData,
+        this.inputs
+      );
+    }
+  };
+
+  public refreshInputs = () => {
+    this.inputHookNodes.forEach((nod3) => nod3.refreshOutputs());
+    for (const label in this.inputs) {
+      const hookNod3 = Nod3.inputHookNode(this.inputs[label]);
+      if (hookNod3) {
+        const outputLabel = Nod3.extractLabel(
+          this.inputs[label].hook as string
+        );
+       
+      }
+    }
+  };
+
+  public static extractLabel = (id: string) => {
+    if (id.includes("input")) return id.split("@")[1].split("input")[0];
+    if (id.includes("output")) return id.split("@")[1].split("output")[0];
+    console.log("improper id");
+    return "improper";
+  };
+
+  public get inputHookNodes() {
+    const nod3s = new Set();
+
+    for (const label in this.inputs) {
+      const hookNod3 = Nod3.inputHookNode(this.inputs[label]);
+      if (hookNod3) nod3s.add(hookNod3);
+    }
+
+    return Array.from(nod3s) as Nod3<unknown>[];
+  }
+
+  public preprocess = (inputs: Nod3Inputs) => {
+    this.preprocessData = this.preprocessor(inputs);
+  };
+
+  /**
+   * remove nod3 from memory
+   */
   public dispose = () => {
     memory.remove(this.id);
   };
 
-  private runPrevious = (onlyIfNull = true) => {
-    for (const socket of this.inputs) {
-      if (onlyIfNull && socket.data) continue;
-      if (!socket.side.out) {
-        console.log("please set a default value for the input socket");
-        continue;
-      }
-      socket.side.out.run();
-    }
+  public static inputHookNode = (input: Nod3Input) => {
+    const { hook } = input;
+    if (typeof hook !== "string") return null;
+    if (!hook.includes("output")) return null;
+    if (!hook.includes("@")) return null;
+    const nod3Id = hook.split("@")[0];
+    const nod3 = Nod3.getById(nod3Id);
+    if (!nod3) return null;
+
+    return nod3;
   };
 
-  public run = (rerun = false) => {
-    if (!this.executor) {
-      console.log("Node doesn't have an executor");
-      return;
-    }
-    this.runPrevious(!rerun);
-    this.executor(this.inputs, this.outputs);
-  };
-
-  public remove = () => {
-    nod3EventManager.fire(Nod3EventType.removed, {
-      id: this.id,
-      details: "nod3 removed",
-    });
-
-    for (const socket of [...this.inputs, ...this.outputs]) {
-      socket.sever();
-    }
-    this.dispose();
-  };
-
+  /** Static Accessors */
   public static getById = (id: string) => {
     const obj = memory.get(id);
-    if (obj?.objectType === "nod3") return obj as Nod3;
+    if (obj?.objectType === "nod3") return obj as Nod3<unknown>;
     return null;
   };
 
   public static getAll = () => {
-    return memory.getAll().filter((el) => el.objectType === "nod3") as Nod3[];
+    return memory
+      .getAll()
+      .filter((el) => el.objectType === "nod3") as Nod3<unknown>[];
   };
 }
