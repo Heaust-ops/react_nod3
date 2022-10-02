@@ -109,18 +109,21 @@ export class Socket {
 
 export interface InSocketOptions extends SocketOptions {
   allowedTypes?: string[];
+  accept1?: boolean;
 }
 
 export class InSocket extends Socket {
   allowedTypes: string[];
   hooks: string[] = [];
+  accept1: boolean;
 
   constructor(args: InSocketOptions) {
     super(args);
     this.allowedTypes = args.allowedTypes ?? [this.type];
+    this.accept1 = typeof args.accept1 === "boolean" ? args.accept1 : false;
   }
 
-  public setValue = (value: string) => {
+  public setValue = (value: unknown) => {
     nod3EventManager.fire(Nod3EventType.changed, {
       id: this.id,
       details: {
@@ -128,14 +131,20 @@ export class InSocket extends Socket {
         id: this.nod3.id,
       },
     });
+
+    this.value = [value];
   };
+
+  public clearHooks() {
+    this.hooks = [];
+  }
 
   public hook = (outSocket: OutSocket | string) => {
     const id = (outSocket as OutSocket).id ?? outSocket;
     const exists = this.hooks.includes(id);
     if (exists) return;
     if (typeof outSocket === "string" && !Socket.getById(outSocket)) return;
-    this.hooks.push(id);
+    this.accept1 ? (this.hooks = [id]) : this.hooks.push(id);
   };
 
   public unhook = (outSocket: OutSocket | string) => {
@@ -148,6 +157,10 @@ export class InSocket extends Socket {
     for (const outSock of this.hookedOutputs) {
       (this.value as unknown[]).push(outSock.value);
     }
+  }
+
+  public get isHooked() {
+    return !!this.hooks.length;
   }
 
   public get hookedOutputs() {

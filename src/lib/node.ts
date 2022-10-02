@@ -70,8 +70,13 @@ export class Nod3<PreprocessData> {
     return this;
   }
 
-  public refreshDepth(depth: number) {
-    const levels = this.getDepth(depth).reverse();
+  public refreshDepth(depth: number, beforeId: string) {
+    let levels = this.getDepth(depth, beforeId);
+
+    if (levels[levels.length - 1].map((el) => el.id).includes(beforeId))
+      levels.pop();
+
+    levels = levels.reverse();
     for (const level of levels) {
       for (const nod3 of level) {
         nod3.refresh();
@@ -81,7 +86,7 @@ export class Nod3<PreprocessData> {
     return this;
   }
 
-  public getDepth(depth: number) {
+  public getDepth(depth: number, stopAt?: string) {
     const nod3sLevels = [[this]] as Nod3<unknown>[][];
 
     for (let i = 0; i < depth; i++) {
@@ -106,6 +111,7 @@ export class Nod3<PreprocessData> {
         }
       }
 
+      if (stopAt && currentLevel.map((el) => el.id).includes(stopAt)) break;
       if (currentLevel.length === 0) break;
       nod3sLevels.push();
     }
