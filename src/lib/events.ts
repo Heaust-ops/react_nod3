@@ -8,7 +8,7 @@ export enum Nod3EventType {
 
 export interface Nod3EventData<T> {
   id: string;
-  details: T;
+  details: { msg: string } & T;
 }
 
 export type Nod3EventHandler = <T>(
